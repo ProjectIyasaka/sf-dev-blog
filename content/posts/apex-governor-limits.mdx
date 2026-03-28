@@ -1,0 +1,55 @@
+---
+title: "Apex ガバナ制限を完全理解する：よくある落とし穴と回避策"
+date: "2026-03-28"
+description: "SOQLクエリ数・CPU時間・ヒープサイズなどApexのガバナ制限を実例コードで解説。本番障害を防ぐための設計パターンを紹介します。"
+tags: ["Apex", "ガバナ制限", "パフォーマンス"]
+affiliate: "hubspot"
+---
+
+## ガバナ制限とは
+
+Salesforceはマルチテナント環境のため、1トランザクション内で使えるリソースに上限（ガバナ制限）があります。
+これを理解せずに実装すると本番で `System.LimitException` が発生します。
+
+## 主要な制限値
+
+| 制限項目 | 同期 | 非同期 |
+|---------|------|--------|
+| SOQLクエリ数 | 100 | 200 |
+| DML文数 | 150 | 150 |
+| CPU時間 | 10,000ms | 60,000ms |
+| ヒープサイズ | 6MB | 12MB |
+
+## よくある失敗パターン
+
+### ループ内SOQL（絶対NG）
+
+```apex
+// NG: ループ内でSOQL
+for (Account acc : accounts) {
+    List<Contact> contacts = [SELECT Id FROM Contact WHERE AccountId = :acc.Id];
+}
+
+// OK: バルク化
+Map<Id, List<Contact>> contactMap = new Map<Id, List<Contact>>();
+List<Contact> allContacts = [SELECT Id, AccountId FROM Contact WHERE AccountId IN :accounts];
+for (Contact c : allContacts) {
+    if (!contactMap.containsKey(c.AccountId)) contactMap.put(c.AccountId, new List<Contact>());
+    contactMap.get(c.AccountId).add(c);
+}
+```
+
+## Limits クラスで残量を確認する
+
+```apex
+System.debug('残SOQLクエリ数: ' + (Limits.getLimitQueries() - Limits.getQueries()));
+System.debug('残DML数: ' + (Limits.getLimitDmlStatements() - Limits.getDmlStatements()));
+```
+
+## まとめ
+
+- ループ内SOQLは必ずバルク化する
+- Limitsクラスでデバッグ時に残量確認する
+- 大量データはBatch Apexに逃がす
+
+<AffiliateCard type="hubspot" />
