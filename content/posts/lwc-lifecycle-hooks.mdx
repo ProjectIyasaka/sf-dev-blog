@@ -1,0 +1,126 @@
+---
+title: "LWCライフサイクルフック完全ガイド：connectedCallback・renderedCallbackの使い分け"
+date: "2026-03-25"
+description: "Lightning Web Componentsのライフサイクルフックを実例コードで解説。constructor・connectedCallback・renderedCallbackの違いと正しい使い方を紹介します。"
+tags: ["LWC", "Lightning Web Components", "JavaScript"]
+---
+
+## LWCのライフサイクルとは
+
+LWC（Lightning Web Components）にはコンポーネントの生成から破棄まで、特定のタイミングで自動的に呼ばれるライフサイクルフックが存在します。
+これを正しく理解することで、初期化処理・データ取得・DOM操作のタイミングを適切に制御できます。
+
+## ライフサイクルの順序
+
+```
+constructor()
+    ↓
+connectedCallback()
+    ↓
+render()
+    ↓
+renderedCallback()
+    ↓
+disconnectedCallback()  ← コンポーネント破棄時
+```
+
+## 各フックの解説
+
+### constructor()
+
+コンポーネントのインスタンス生成時に呼ばれます。
+
+```javascript
+import { LightningElement } from 'lwc';
+
+export default class MyComponent extends LightningElement {
+    constructor() {
+        super(); // 必須
+        // NG: this.template へのアクセスはまだできない
+        // OK: プロパティの初期化のみ
+        this.message = 'Hello';
+    }
+}
+```
+
+**注意点**
+- `super()` の呼び出しが必須
+- `this.template` や子コンポーネントへのアクセスは不可
+
+### connectedCallback()
+
+コンポーネントがDOMに追加されたときに呼ばれます。最もよく使うフックです。
+
+```javascript
+import { LightningElement, wire } from 'lwc';
+import { getRecord } from 'lightning/uiRecordApi';
+
+export default class MyComponent extends LightningElement {
+    connectedCallback() {
+        // Apex呼び出し、イベントリスナー登録などに使う
+        this.loadData();
+    }
+
+    loadData() {
+        // 初期データ取得処理
+    }
+}
+```
+
+### renderedCallback()
+
+レンダリングのたびに呼ばれます。DOM操作が必要な場合に使います。
+
+```javascript
+export default class MyComponent extends LightningElement {
+    isRendered = false;
+
+    renderedCallback() {
+        if (this.isRendered) return; // 初回のみ実行
+        this.isRendered = true;
+
+        // DOM要素へのアクセスが可能
+        const el = this.template.querySelector('.my-element');
+        if (el) {
+            el.style.color = 'red';
+        }
+    }
+}
+```
+
+**注意点**
+- プロパティ変更のたびに呼ばれるため、無限ループに注意
+- フラグで初回のみ実行するパターンが一般的
+
+### disconnectedCallback()
+
+コンポーネントがDOMから削除されたときに呼ばれます。
+
+```javascript
+export default class MyComponent extends LightningElement {
+    connectedCallback() {
+        this._handler = this.handleScroll.bind(this);
+        window.addEventListener('scroll', this._handler);
+    }
+
+    disconnectedCallback() {
+        // イベントリスナーの解除（メモリリーク防止）
+        window.removeEventListener('scroll', this._handler);
+    }
+
+    handleScroll() {
+        // スクロール処理
+    }
+}
+```
+
+## まとめ
+
+| フック | タイミング | 主な用途 |
+|--------|-----------|---------|
+| constructor | インスタンス生成 | プロパティ初期化 |
+| connectedCallback | DOM追加時 | データ取得・イベント登録 |
+| renderedCallback | レンダリング後 | DOM操作 |
+| disconnectedCallback | DOM削除時 | クリーンアップ |
+
+ライフサイクルを正しく理解することで、バグの少ない堅牢なLWCコンポーネントが作れます。

@@ -1,0 +1,141 @@
+---
+title: "SOQLパフォーマンス最適化：遅いクエリを速くする7つのテクニック"
+date: "2026-03-15"
+description: "SOQLが遅い原因と対策を解説。インデックスの活用・SELECTiveフィルター・大量データ処理のパターンなど、本番環境で効果があった手法をまとめます。"
+tags: ["SOQL", "パフォーマンス", "Apex"]
+---
+
+## SOQLが遅くなる主な原因
+
+1. インデックスが使われていない
+2. 取得するフィールドが多すぎる
+3. WHERE句の条件が非効率
+4. 大量レコードを一度に処理している
+
+## テクニック1：必要なフィールドだけSELECT
+
+```apex
+// NG: 全フィールド取得（遅い・ヒープを無駄に消費）
+List<Account> accounts = [SELECT FIELDS(ALL) FROM Account LIMIT 200];
+
+// OK: 必要なフィールドだけ
+List<Account> accounts = [SELECT Id, Name, Phone FROM Account LIMIT 200];
+```
+
+## テクニック2：インデックス付きフィールドでフィルター
+
+Salesforceで自動インデックスが付くフィールド：
+- `Id`
+- `Name`
+- `CreatedDate`
+- `LastModifiedDate`
+- 外部ID（External ID）
+- ユニーク制約フィールド
+
+```apex
+// OK: Idでフィルター（インデックス使用）
+List<Contact> contacts = [SELECT Id, Name FROM Contact WHERE AccountId = :accountId];
+
+// NG: 数式フィールドでフィルター（インデックス使用不可）
+List<Contact> contacts = [SELECT Id FROM Contact WHERE MyFormulaField__c = 'value'];
+```
+
+## テクニック3：SELECTiveフィルターを先に書く
+
+```apex
+// OK: 絞り込み効果の高い条件を先に
+[SELECT Id FROM Opportunity
+ WHERE AccountId = :accId          // インデックスあり（先に書く）
+ AND StageName = 'Closed Won'      // インデックスなし（後に書く）
+ AND CloseDate >= 2026-01-01]
+```
+
+## テクニック4：LIMIT・OFFSETでページネーション
+
+```apex
+// 大量データを一度に取得せずページ分割
+public List<Account> getAccountPage(Integer pageSize, Integer offset) {
+    return [
+        SELECT Id, Name
+        FROM Account
+        ORDER BY Name
+        LIMIT :pageSize
+        OFFSET :offset
+    ];
+}
+```
+
+## テクニック5：集計はSOQLで行う
+
+```apex
+// NG: Apexで集計（全レコード取得してからループ）
+List<Opportunity> opps = [SELECT Amount FROM Opportunity WHERE AccountId = :accId];
+Decimal total = 0;
+for (Opportunity opp : opps) total += opp.Amount;
+
+// OK: SOQLのAggregateで集計（DBが処理）
+AggregateResult[] results = [
+    SELECT SUM(Amount) total
+    FROM Opportunity
+    WHERE AccountId = :accId
+];
+Decimal total = (Decimal) results[0].get('total');
+```
+
+## テクニック6：子レコードはサブクエリで取得
+
+```apex
+// NG: ループ内で子クエリ（SOQLが複数発行される）
+for (Account acc : accounts) {
+    List<Contact> contacts = [SELECT Id FROM Contact WHERE AccountId = :acc.Id];
+}
+
+// OK: 親クエリにサブクエリを含める（1回のSOQLで完結）
+List<Account> accounts = [
+    SELECT Id, Name,
+           (SELECT Id, LastName FROM Contacts ORDER BY LastName LIMIT 10)
+    FROM Account
+    WHERE Id IN :accountIds
+];
+```
+
+## テクニック7：QueryLocatorでバッチ処理
+
+100万件以上のデータは通常のSOQLでは処理できません。Batch Apexを使います。
+
+```apex
+global class AccountBatch implements Database.Batchable<SObject> {
+
+    global Database.QueryLocator start(Database.BatchableContext bc) {
+        // QueryLocatorは5000万件まで処理可能
+        return Database.getQueryLocator(
+            'SELECT Id, Name FROM Account WHERE IsActive__c = true'
+        );
+    }
+
+    global void execute(Database.BatchableContext bc, List<Account> scope) {
+        // scopeは200件ずつ渡される
+        for (Account acc : scope) {
+            // 処理
+        }
+        update scope;
+    }
+
+    global void finish(Database.BatchableContext bc) {}
+}
+
+// 実行
+Database.executeBatch(new AccountBatch(), 200);
+```
+
+## まとめ
+
+| テクニック | 効果 |
+|-----------|------|
+| 必要なフィールドだけSELECT | ヒープ削減・速度向上 |
+| インデックスフィールドでフィルター | クエリ速度大幅改善 |
+| 集計をSOQLで行う | Apex処理削減 |
+| サブクエリ活用 | SOQL発行数削減 |
+| Batch Apex | 大量データ対応 |
+
+パフォーマンス問題はDeveloper ConsoleのQuery Planツールで原因を特定できます。本番でエラーが出る前に開発環境で必ず確認しましょう。

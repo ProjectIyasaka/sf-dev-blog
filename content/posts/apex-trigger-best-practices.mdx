@@ -1,0 +1,137 @@
+---
+title: "Apexトリガーのベストプラクティス：1オブジェクト1トリガー設計"
+date: "2026-03-20"
+description: "Apexトリガーの設計パターンを解説。複数トリガーによる実行順序問題を避けるTrigger Handlerパターンの実装方法を紹介します。"
+tags: ["Apex", "トリガー", "設計パターン"]
+---
+
+## よくある失敗：複数トリガーの乱立
+
+```
+Account_SendEmail.trigger
+Account_UpdateField.trigger
+Account_SyncToERP.trigger
+```
+
+このように1オブジェクトに複数トリガーを作ると、**実行順序が保証されない**ため予期しないバグが発生します。
+
+## ベストプラクティス：1オブジェクト1トリガー + Handlerパターン
+
+### トリガー（薄く保つ）
+
+```apex
+trigger AccountTrigger on Account (
+    before insert, before update, before delete,
+    after insert, after update, after delete, after undelete
+) {
+    AccountTriggerHandler handler = new AccountTriggerHandler();
+
+    if (Trigger.isBefore) {
+        if (Trigger.isInsert) handler.beforeInsert(Trigger.new);
+        if (Trigger.isUpdate) handler.beforeUpdate(Trigger.new, Trigger.oldMap);
+        if (Trigger.isDelete) handler.beforeDelete(Trigger.old);
+    }
+
+    if (Trigger.isAfter) {
+        if (Trigger.isInsert) handler.afterInsert(Trigger.new);
+        if (Trigger.isUpdate) handler.afterUpdate(Trigger.new, Trigger.oldMap);
+        if (Trigger.isDelete) handler.afterDelete(Trigger.old);
+        if (Trigger.isUndelete) handler.afterUndelete(Trigger.new);
+    }
+}
+```
+
+### Handlerクラス（ロジックをここに集約）
+
+```apex
+public class AccountTriggerHandler {
+
+    public void beforeInsert(List<Account> newAccounts) {
+        AccountService.setDefaultValues(newAccounts);
+    }
+
+    public void beforeUpdate(List<Account> newAccounts, Map<Id, Account> oldMap) {
+        AccountService.validateChanges(newAccounts, oldMap);
+    }
+
+    public void afterInsert(List<Account> newAccounts) {
+        AccountService.createRelatedRecords(newAccounts);
+        AccountService.notifySlack(newAccounts);
+    }
+
+    public void afterUpdate(List<Account> newAccounts, Map<Id, Account> oldMap) {
+        // 変更があったレコードのみ処理
+        List<Account> changed = new List<Account>();
+        for (Account acc : newAccounts) {
+            if (acc.Name != oldMap.get(acc.Id).Name) {
+                changed.add(acc);
+            }
+        }
+        if (!changed.isEmpty()) {
+            AccountService.syncToERP(changed);
+        }
+    }
+
+    public void beforeDelete(List<Account> oldAccounts) {}
+    public void afterDelete(List<Account> oldAccounts) {}
+    public void afterUndelete(List<Account> newAccounts) {}
+}
+```
+
+### Serviceクラス（再利用可能なロジック）
+
+```apex
+public class AccountService {
+
+    public static void setDefaultValues(List<Account> accounts) {
+        for (Account acc : accounts) {
+            if (acc.Rating == null) {
+                acc.Rating = 'Warm';
+            }
+        }
+    }
+
+    public static void validateChanges(List<Account> accounts, Map<Id, Account> oldMap) {
+        for (Account acc : accounts) {
+            Account old = oldMap.get(acc.Id);
+            if (old.Industry != null && acc.Industry == null) {
+                acc.addError('業種を空にすることはできません');
+            }
+        }
+    }
+
+    public static void createRelatedRecords(List<Account> accounts) {
+        List<Contact> contacts = new List<Contact>();
+        for (Account acc : accounts) {
+            contacts.add(new Contact(
+                LastName = '担当者',
+                AccountId = acc.Id
+            ));
+        }
+        insert contacts;
+    }
+
+    public static void syncToERP(List<Account> accounts) {
+        // 外部システム連携処理
+    }
+
+    public static void notifySlack(List<Account> accounts) {
+        // Slack通知処理
+    }
+}
+```
+
+## この設計のメリット
+
+| 項目 | 複数トリガー | Handlerパターン |
+|------|------------|----------------|
+| 実行順序 | 不定 | 明確 |
+| テスト | 難しい | 容易 |
+| 可読性 | 低い | 高い |
+| 再利用性 | 低い | 高い |
+
+## まとめ
+
+- トリガーは薄く保ち、ロジックはHandlerとServiceに分離
+- 1オブジェクトにつきトリガーは1つだけ
+- Serviceクラスは他のクラスからも呼び出せるので再利用性が高い

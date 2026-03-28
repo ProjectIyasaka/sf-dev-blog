@@ -1,0 +1,129 @@
+---
+title: "SalesforceのREST APIを使った外部システム連携入門"
+date: "2026-03-22"
+description: "Salesforce REST APIの認証からデータ取得・更新まで実例で解説。Connected Appの設定からcURLでの動作確認、JavaScriptでの実装方法を紹介します。"
+tags: ["REST API", "インテグレーション", "Connected App"]
+---
+
+## Salesforce REST APIとは
+
+Salesforce REST APIを使うと、外部システムからSalesforceのデータをCRUD操作できます。
+JavaやJavaScript、Pythonなどあらゆる言語から利用可能です。
+
+## 事前準備：Connected Appの作成
+
+1. **設定 → アプリケーションマネージャー → 新規接続アプリケーション**
+2. 以下を設定：
+   - OAuth設定を有効化
+   - コールバックURL: `https://login.salesforce.com/services/oauth2/success`
+   - OAuth範囲: `api`, `refresh_token`
+3. **コンシューマー鍵（Client ID）** と **コンシューマーの秘密（Client Secret）** を控える
+
+## 認証：アクセストークンの取得
+
+```bash
+curl -X POST https://login.salesforce.com/services/oauth2/token \
+  -d "grant_type=password" \
+  -d "client_id=YOUR_CLIENT_ID" \
+  -d "client_secret=YOUR_CLIENT_SECRET" \
+  -d "username=your@email.com" \
+  -d "password=YOUR_PASSWORDyourSecurityToken"
+```
+
+レスポンス例：
+```json
+{
+  "access_token": "00D...",
+  "instance_url": "https://yourorg.salesforce.com",
+  "token_type": "Bearer"
+}
+```
+
+## データ取得（SOQL）
+
+```bash
+curl -X GET \
+  "https://yourorg.salesforce.com/services/data/v59.0/query?q=SELECT+Id,Name+FROM+Account+LIMIT+10" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+## JavaScriptでの実装例
+
+```javascript
+const SF_INSTANCE_URL = 'https://yourorg.salesforce.com';
+const ACCESS_TOKEN = 'your_access_token';
+
+async function queryAccounts() {
+    const soql = 'SELECT Id, Name, Phone FROM Account LIMIT 10';
+    const url = `${SF_INSTANCE_URL}/services/data/v59.0/query?q=${encodeURIComponent(soql)}`;
+
+    const response = await fetch(url, {
+        headers: {
+            'Authorization': `Bearer ${ACCESS_TOKEN}`,
+            'Content-Type': 'application/json'
+        }
+    });
+
+    const data = await response.json();
+    return data.records;
+}
+
+// レコード作成
+async function createAccount(name) {
+    const url = `${SF_INSTANCE_URL}/services/data/v59.0/sobjects/Account`;
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${ACCESS_TOKEN}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ Name: name })
+    });
+
+    return await response.json();
+}
+```
+
+## Javaでの実装例
+
+```java
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.net.URI;
+
+public class SalesforceClient {
+    private final String instanceUrl;
+    private final String accessToken;
+    private final HttpClient client = HttpClient.newHttpClient();
+
+    public SalesforceClient(String instanceUrl, String accessToken) {
+        this.instanceUrl = instanceUrl;
+        this.accessToken = accessToken;
+    }
+
+    public String queryAccounts() throws Exception {
+        String soql = "SELECT Id, Name FROM Account LIMIT 10";
+        String url = instanceUrl + "/services/data/v59.0/query?q="
+                     + java.net.URLEncoder.encode(soql, "UTF-8");
+
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(url))
+            .header("Authorization", "Bearer " + accessToken)
+            .GET()
+            .build();
+
+        HttpResponse<String> response = client.send(request,
+            HttpResponse.BodyHandlers.ofString());
+        return response.body();
+    }
+}
+```
+
+## まとめ
+
+- Connected Appで認証情報を発行
+- OAuth2.0でアクセストークンを取得
+- `Authorization: Bearer` ヘッダーでAPIを呼び出す
+- Java・JavaScriptどちらでも同じ手順で連携できる
